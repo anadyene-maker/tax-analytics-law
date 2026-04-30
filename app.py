@@ -2,56 +2,114 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="Auditoria Multi-Filiais", layout="wide")
+# 1. Configurações Iniciais da Página
+st.set_page_config(page_title="Tax Analytics - Indústria MS", layout="wide")
 
-st.title("⚖️ Auditoria Tributária - Comparativo entre Filiais/Cidades")
+# Estilo para o título
+st.title("⚖️ Sistema de Auditoria Fiscal e Logística")
 st.markdown("""
-Suba os arquivos de diferentes unidades (ex: Campo Grande, Dourados, Três Lagoas) para comparar o potencial de crédito.
+Esta ferramenta analisa o impacto tributário de saídas de mercadorias partindo de **Mato Grosso do Sul** 
+para todo o Brasil, comparando alíquotas e identificando potencial de crédito.
 """)
 
-# 1. Upload de Múltiplos Arquivos
+# 2. Banco de Dados de Alíquotas Interestaduais (Origem: MS)
+# Fonte: Regulamento do ICMS / Convênio ICMS
+regras_estados = {
+    'AC': 12.0, 'AL': 12.0, 'AM': 12.0, 'AP': 12.0, 'BA': 12.0, 'CE': 12.0,
+    'DF': 12.0, 'ES': 12.0, 'GO': 12.0, 'MA': 12.0, 'MG': 7.0, 'MS': 17.0, 
+    'MT': 12.0, 'PA': 12.0, 'PB': 12.0, 'PE': 12.0, 'PI': 12.0, 'PR': 7.0, 
+    'RJ': 7.0, 'RN': 12.0, 'RO': 12.0, 'RR': 12.0, 'RS': 7.0, 'SC': 7.0, 
+    'SE': 12.0, 'SP': 7.0, 'TO': 12.0
+}
+
+# 3. Barra Lateral para Instruções e Parâmetros Fixos
+with st.sidebar:
+    st.header("Configurações")
+    st.info("O sistema utiliza MS como estado de origem padrão.")
+    aliq_pis_cofins = st.number_input("Alíquota PIS/COFINS (%)", value=9.25) / 100
+    st.write("---")
+    st.markdown("Desenvolvido por **Ana Dyene Pires**")
+
+# 4. Área de Upload de Arquivos
 uploaded_files = st.file_uploader(
-    "Selecione os relatórios das filiais (CSV ou Excel)", 
+    "Arraste aqui os relatórios de vendas/logística das filiais", 
     type=["csv", "xlsx"], 
     accept_multiple_files=True
 )
 
-# Alíquota de PIS/COFINS (9,25%)
-aliquota = 0.0925
-
+# 5. Processamento dos Dados
 if uploaded_files:
-    resultados_finais = []
+    lista_comparativa = []
 
     for file in uploaded_files:
-        # Lógica para ler cada arquivo individualmente
-        if file.name.endswith('.csv'):
-            df_filial = pd.read_csv(file)
-        else:
-            df_filial = pd.read_excel(file)
-        
-        # Simulação de processamento: calculando crédito por filial
-        # (Aqui o script procuraria as colunas de valor e natureza)
-        if 'Valor_Compra' in df_filial.columns:
-            credito_filial = df_filial['Valor_Compra'].sum() * aliquota
-            resultados_finais.append({
-                "Filial/Cidade": file.name.split('.')[0], # Usa o nome do arquivo como nome da filial
-                "Total Compras": df_filial['Valor_Compra'].sum(),
-                "Crédito Recuperável": credito_filial
-            })
+        # Lendo o arquivo conforme a extensão
+        try:
+            if file.name.endswith('.csv'):
+                df = pd.read_csv(file)
+            else:
+                df = pd.read_excel(file)
+            
+            # Padronizando nomes das colunas (exemplo: remover espaços)
+            df.columns = df.columns.str.strip()
 
-    # 2. Exibição da Comparação
-    if resultados_finais:
-        df_comparativo = pd.DataFrame(resultados_finais)
+            # Verificando se as colunas necessárias existem no arquivo subido
+            if 'Estado' in df.columns and 'Valor_Venda' in df.columns:
+                
+                # Mapeando a alíquota de ICMS baseada no Estado de destino
+                df['Aliq_ICMS'] = df['Estado'].map(regras_estados).fillna(17.0)
+                
+                # Cálculos Tributários
+                df['ICMS_Estimado'] = df['Valor_Venda'] * (df['Aliq_ICMS'] / 100)
+                df['Credito_PIS_COFINS'] = df['Valor_Venda'] * aliq_pis_cofins
+                
+                # Consolidando resultados por arquivo (filial)
+                total_venda = df['Valor_Venda'].sum()
+                total_icms = df['ICMS_Estimado'].sum()
+                total_credito = df['Credito_PIS_COFINS'].sum()
+                
+                lista_comparativa.append({
+                    "Unidade/Arquivo": file.name.split('.')[0],
+                    "Volume de Vendas": total_venda,
+                    "ICMS Provisionado": total_icms,
+                    "Crédito Recuperável": total_credito
+                })
+            else:
+                st.warning(f"⚠️ O arquivo {file.name} não possui as colunas 'Estado' e 'Valor_Venda'.")
         
-        st.subheader("📊 Resumo Comparativo")
-        st.dataframe(df_comparativo.style.format({
-            "Total Compras": "R$ {:,.2f}", 
+        except Exception as e:
+            st.error(f"Erro ao processar {file.name}: {e}")
+
+    # 6. Exibição dos Dashboards
+    if lista_comparativa:
+        df_final = pd.DataFrame(lista_comparativa)
+        
+        st.subheader("📊 Comparativo Gerencial entre Filiais")
+        
+        # Formatação de Moeda para a tabela
+        st.dataframe(df_final.style.format({
+            "Volume de Vendas": "R$ {:,.2f}",
+            "ICMS Provisionado": "R$ {:,.2f}",
             "Crédito Recuperável": "R$ {:,.2f}"
-        }))
+        }), use_container_width=True)
 
-        # Gráfico de comparação entre as unidades
-        st.bar_chart(data=df_comparativo.set_index('Filial/Cidade')['Crédito Recuperável'])
+        st.divider()
 
-        st.success(f"Análise concluída para {len(uploaded_files)} unidades.")
+        # Gráficos
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**Crédito Recuperável por Unidade**")
+            st.bar_chart(data=df_final.set_index('Unidade/Arquivo')['Crédito Recuperável'])
+        
+        with col2:
+            st.write("**Carga de ICMS Estimada**")
+            st.line_chart(data=df_final.set_index('Unidade/Arquivo')['ICMS Provisionado'])
+
+        # Botão de Exportação do Consolidado
+        st.download_button(
+            label="📩 Baixar Relatório Consolidado (CSV)",
+            data=df_final.to_csv(index=False).encode('utf-8'),
+            file_name='consolidado_tax_analytics.csv',
+            mime='text/csv'
+        )
 else:
-    st.info("Aguardando upload de arquivos para iniciar a comparação.")
+    st.info("Aguardando o upload de arquivos CSV ou Excel para gerar o relatório.")
